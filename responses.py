@@ -1,58 +1,74 @@
 import os
-from random import choice, randint
+from random import choice
+import time
 from typing import Final
 from dotenv import load_dotenv
 import requests
 
 load_dotenv()
 KEY: Final[str] = os.getenv('API_KEY')
-print(KEY)
 
-def giveRank(username,hashtag: str) -> str:
-    LOLUserName = username
-    LOLhashtag = hashtag
-    resp1 = requests.get(f"https://americas.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{LOLUserName}/{LOLhashtag}" + '?api_key=' + KEY)
-    if resp1.status_code == 200:
-        player_info = resp1.json()
-        player_puuid = player_info['puuid']
-        resp2 = requests.get(f"https://na1.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{player_puuid}" + '?api_key=' + KEY)
-        player_info2 = resp2.json()
-        player_summunerid = player_info2['id']
-        resp3 = requests.get(f"https://na1.api.riotgames.com/lol/league/v4/entries/by-summoner/{player_summunerid}" + '?api_key=' + KEY)
-        player_info3 = resp3.json()
-        if player_info3 == []:
-            return f"""
-RiotID: {LOLUserName}#{LOLhashtag}
-Solo/Duo Ranked: Not Played Yet...
-Flex Ranked: Not Played Yet...
-"""
+def formatdata(rankData: dict) -> str:
+    return f"{rankData['tier']} {rankData['rank']} {rankData['leaguePoints']} LP Wins: {rankData['wins']}, Losses: {rankData['losses']}"
+
+def fetchdata(url: str, max_retries: int = 5) -> dict:
+    for attempt in range(max_retries):
+        resp = requests.get(url)
+        if resp.status_code == 200:
+            return resp.json()
+        elif resp.status_code == 429:
+            retry_after = int(resp.headers.get('Retry-After', 1))
+            print(f"Rate limit exceeded. Retrying after {retry_after} seconds...")
+            time.sleep(retry_after)
         else:
-            if len(player_info3) == 2:
-                player_solo_duo_info = player_info3[0]
-                player_flex_info = player_info3[1]
-            else:
-                player_unknown_info = player_info3[0]
-                if player_unknown_info['queueType'] == "RANKED_FLEX_SR":
-                    player_flex_info = player_unknown_info
-                    return f"""
-RiotID: {LOLUserName}#{LOLhashtag}
-Solo/Duo Ranked: Not Played Yet...
-Flex Ranked: {player_flex_info['tier']} {player_flex_info['rank']} {player_flex_info['leaguePoints']} LP Wins: {player_flex_info['wins']}, Losses: {player_flex_info['losses']}
+            print(f"Failed to fetch data. Status Code: {resp.status_code}, URL: {url}")
+            return None
+    print("Max retries reached. Giving up.")
+    return None
+
+def giveRank(username: str, tag: str) -> str:
+    username, tag = username.strip(), tag.strip()
+    if not username or not tag:
+        return "Invalid username or tag provided."
+
+    account_url = f"https://americas.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{username}/{tag}?api_key={KEY}"
+    account_data = fetchdata(account_url)
+    if not account_data:
+        return "Failed to fetch account data. Please check the username and tag."
+
+    puuid = account_data.get('puuid')
+    if not puuid:
+        return "Failed to retrieve PUUID. Ensure the username and tag are correct."
+
+    summoner_url = f"https://na1.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{puuid}?api_key={KEY}"
+    summoner_data = fetchdata(summoner_url)
+    if not summoner_data:
+        return "Failed to fetch summoner data."
+
+    summoner_id = summoner_data.get('id')
+    if not summoner_id:
+        return "Failed to retrieve summoner ID."
+
+    rank_url = f"https://na1.api.riotgames.com/lol/league/v4/entries/by-summoner/{summoner_id}?api_key={KEY}"
+    rank_data = fetchdata(rank_url)
+    if not rank_data:
+        return "Failed to fetch rank data."
+
+    player_rank_flex = "Not Played Yet..."
+    player_rank_solo_duo = "Not Played Yet..."
+    for entity in rank_data:
+        if entity['queueType'] == "RANKED_FLEX_SR":
+            player_rank_flex = formatdata(entity)
+        elif entity['queueType'] == "RANKED_SOLO_5x5":
+            player_rank_solo_duo = formatdata(entity)
+
+    return f"""
+RiotID: {username}#{tag}
+Solo/Duo Ranked: {player_rank_solo_duo}
+Flex Ranked: {player_rank_flex}
 """
-                else:
-                    player_solo_duo_info = player_unknown_info
-                    return f"""
-RiotID: {LOLUserName}#{LOLhashtag}
-Solo/Duo Ranked: {player_solo_duo_info['tier']} {player_solo_duo_info['rank']} {player_solo_duo_info['leaguePoints']} LP Wins: {player_solo_duo_info['wins']}, Losses: {player_solo_duo_info['losses']}
-Flex Ranked: Not Played Yet...
-"""
-            return f"""
-RiotID: {LOLUserName}#{LOLhashtag}
-Solo/Duo Ranked: {player_solo_duo_info['tier']} {player_solo_duo_info['rank']} {player_solo_duo_info['leaguePoints']} LP Wins: {player_solo_duo_info['wins']}, Losses: {player_solo_duo_info['losses']}
-Flex Ranked: {player_flex_info['tier']} {player_flex_info['rank']} {player_flex_info['leaguePoints']} LP Wins: {player_flex_info['wins']}, Losses: {player_flex_info['losses']}
-"""
-    else:
-        return f"Riot Username and/or Hashtag was not found. Status Code Error {resp1.status_code}"
+
+
 
 def get_response(user_input: str) -> str:
     lowered: str = user_input.lower()
@@ -60,11 +76,11 @@ def get_response(user_input: str) -> str:
     if lowered == '':
         return 'Well, you\'re awfully silent...'
     elif 'league ranked' in lowered:
-        rest = user_input[13:]
-        usernameandhashtag = rest.split("#")
-        username = usernameandhashtag[0]
-        hashtag = usernameandhashtag[1]
-        return giveRank(username,hashtag)
+        Userinfo = user_input[13:].strip()
+        if '#' not in user_input:
+            return "Invalid format. Please provide Username#Tag"
+        username, tag = Userinfo.split('#')
+        return giveRank(username.strip(),tag.strip())
     elif 'hello' in lowered:
         return 'Hello there!'
     elif 'help' in lowered:
@@ -76,7 +92,6 @@ $hello
 $league ranked username#hashtag
 $commands
 $help
-$
 """
     else:
         return choice(['I do not understand...', 
