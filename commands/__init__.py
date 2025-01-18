@@ -46,7 +46,6 @@ commands = {
     '': empty
 }
 
-# command stuff
 def get_response(user_input: str) -> str:
     if user_input == '':
         return commands.get('')()
@@ -54,9 +53,9 @@ def get_response(user_input: str) -> str:
     command = user_input.split()[0]
     args = user_input.split()[1:]
 
-    if commands.get(command.lower()):
-        return commands.get(command)(args)
-    else:
+    if not commands.get(command.lower()):
         return choice(['I do not understand...',
-                       'What are you talking about?',
-                       'Do you mind rephrasing that?'])
+            'What are you talking about?',
+            'Do you mind rephrasing that?'])
+
+    return commands.get(command)(args)
